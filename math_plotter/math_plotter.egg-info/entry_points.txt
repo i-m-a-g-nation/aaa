@@ -1,0 +1,2 @@
+[console_scripts]
+math-plotter = app.main:main

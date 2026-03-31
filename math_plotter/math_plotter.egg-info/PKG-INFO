@@ -1,0 +1,41 @@
+Metadata-Version: 2.4
+Name: math_plotter
+Version: 0.1.0
+Summary: A professional mathematical plotting desktop application.
+Author-email: User <user@example.com>
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: PySide6==6.7.2
+Requires-Dist: sympy>=1.12
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: scipy>=1.10.0
+Requires-Dist: pyqtgraph>=0.13.3
+Requires-Dist: scikit-image>=0.21.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4.0; extra == "dev"
+
+# Math Plotter
+
+一款专业的数学绘图桌面软件。
+
+## 功能特性
+- 支持多种数学函数绘制：显函数、参数方程、极坐标函数、隐函数、分段函数。
+- 交互式操作：平移、缩放、点击拾取。
+- 强大的安全数学表达式解析（基于 Sympy）。
+
+## 快速开始
+
+### 安装依赖
+```bash
+pip install -r requirements.txt
+```
+
+### 运行软件
+```bash
+python app/main.py
+```
+
+### 运行测试
+```bash
+pytest tests/
+```

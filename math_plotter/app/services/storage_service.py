@@ -1,14 +1,21 @@
 import json
-from PySide6.QtGui import QColor
 
 class StorageService:
     @staticmethod
-    def save_project(file_path: str, functions: dict):
-        data = []
+    def save_project(file_path: str, functions: dict, grid_mode: str, view_range: tuple):
+        data = {
+            'version': '1.1',
+            'grid_mode': grid_mode,
+            'view_range': view_range,
+            'functions': []
+        }
         for func_id, model in functions.items():
-            data.append({
+            data['functions'].append({
                 'id': model.id,
                 'original_str': model.original_str,
+                'mode': model.mode, # 保存 mode 避免加载时重新猜测，丢失强制极坐标等状态
+                't_min': model.t_min,
+                't_max': model.t_max,
                 'color': model.color.name(),
                 'width': model.width,
                 'visible': model.visible,
@@ -23,5 +30,13 @@ class StorageService:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             
-        # 返回原始字符串列表，由外部重新调用 parser 以保证安全
+        # 兼容旧版本 JSON (1.0)
+        if isinstance(data, list):
+            return {
+                'version': '1.0',
+                'grid_mode': 'cartesian',
+                'view_range': None,
+                'functions': data
+            }
+            
         return data

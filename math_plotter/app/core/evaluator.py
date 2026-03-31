@@ -3,9 +3,23 @@ import sympy
 from skimage import measure
 from app.utils.math_utils import clean_asymptotes
 
+class EvaluationError(Exception):
+    """数值计算阶段的自定义异常"""
+    pass
+
 class Evaluator:
     @staticmethod
-    def evaluate_explicit(expr, x_min, x_max, points=2000):
+    def _calculate_adaptive_points(span, base_points=2000):
+        # 视口越大，需要的点数越多，但有一个合理的上限
+        # 假设标准视口宽度为 20，对应 2000 个点
+        points = int(base_points * max(1.0, np.sqrt(span / 20.0)))
+        return min(points, 10000)  # 限制最大点数防止内存爆炸
+
+    @staticmethod
+    def evaluate_explicit(expr, x_min, x_max, points=None):
+        if points is None:
+            points = Evaluator._calculate_adaptive_points(x_max - x_min)
+            
         x_sym = sympy.Symbol('x')
         # 兼容只包含常数的表达式，如 y = 5
         f = sympy.lambdify(x_sym, expr, modules=['numpy', 'scipy'])
@@ -20,7 +34,7 @@ class Evaluator:
             x_vals, y_vals = clean_asymptotes(x_vals, y_vals)
             return x_vals, y_vals
         except Exception as e:
-            return np.array([]), np.array([])
+            raise EvaluationError(f"显函数计算失败: {str(e)}")
 
     @staticmethod
     def evaluate_parametric(expr_x, expr_y, t_min=0, t_max=2*np.pi, points=2000):
@@ -40,7 +54,7 @@ class Evaluator:
             y_vals = np.where(np.abs(y_vals) > 1e6, np.nan, y_vals)
             return x_vals, y_vals
         except Exception as e:
-            return np.array([]), np.array([])
+            raise EvaluationError(f"参数方程计算失败: {str(e)}")
 
     @staticmethod
     def evaluate_polar(expr, theta_min=0, theta_max=2*np.pi, points=2000):
@@ -58,11 +72,17 @@ class Evaluator:
             x_vals = r_vals * np.cos(theta_vals)
             y_vals = r_vals * np.sin(theta_vals)
             return x_vals, y_vals
-        except Exception:
-            return np.array([]), np.array([])
+        except Exception as e:
+            raise EvaluationError(f"极坐标方程计算失败: {str(e)}")
 
     @staticmethod
-    def evaluate_implicit(expr, x_min, x_max, y_min, y_max, resolution=200):
+    def evaluate_implicit(expr, x_min, x_max, y_min, y_max, resolution=None):
+        if resolution is None:
+            # 视口越大，网格分辨率越高，但保证渲染性能
+            span = max(x_max - x_min, y_max - y_min)
+            resolution = int(200 * max(1.0, np.sqrt(span / 20.0)))
+            resolution = min(resolution, 500)
+            
         x_sym, y_sym = sympy.symbols('x y')
         f = sympy.lambdify((x_sym, y_sym), expr, modules=['numpy', 'scipy'])
         
@@ -88,4 +108,4 @@ class Evaluator:
                 lines.append((x_coords, y_coords))
             return lines
         except Exception as e:
-            return []
+            raise EvaluationError(f"隐函数计算失败: {str(e)}")

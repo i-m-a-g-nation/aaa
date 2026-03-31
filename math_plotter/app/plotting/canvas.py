@@ -1,7 +1,7 @@
 import pyqtgraph as pg
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtCore import Signal, QTimer
-from app.core.evaluator import Evaluator
+from app.core.evaluator import Evaluator, EvaluationError
 from app.models.function_model import FunctionCurve
 import numpy as np
 from scipy.spatial import cKDTree
@@ -63,24 +63,30 @@ class PlotCanvas(QWidget):
             self._draw_polar_grid()
             
     def _draw_polar_grid(self):
-        # 绘制极坐标背景网格
+        # 绘制极坐标背景网格，根据视口大小动态调整
+        view_range = self.get_view_range()
+        max_extent = max(abs(view_range[0][0]), abs(view_range[0][1]), 
+                         abs(view_range[1][0]), abs(view_range[1][1]))
+        r_max = int(max_extent) + 2
+        
         pen = pg.mkPen(color=(200, 200, 200), width=1, style=pg.QtCore.Qt.DashLine)
         
-        # 绘制同心圆 (r = 1, 2, 3 ... 20)
-        for r in range(1, 21):
+        # 决定同心圆的步长
+        step = 1
+        if r_max > 50: step = 5
+        if r_max > 200: step = 20
+        
+        for r in range(step, r_max + 1, step):
             theta = np.linspace(0, 2 * np.pi, 200)
             x = r * np.cos(theta)
             y = r * np.sin(theta)
             item = pg.PlotDataItem(x, y, pen=pen)
-            # 设置 zValue 使网格在曲线下方
             item.setZValue(-10)
             self.plot_widget.addItem(item)
             self.polar_grid_items.append(item)
             
-        # 绘制放射线 (0 到 360度，每30度一条)
         for angle in range(0, 360, 30):
             rad = np.deg2rad(angle)
-            r_max = 20
             x = [0, r_max * np.cos(rad)]
             y = [0, r_max * np.sin(rad)]
             item = pg.PlotDataItem(x, y, pen=pen)
@@ -114,34 +120,43 @@ class PlotCanvas(QWidget):
         mouse_point = self.plot_widget.plotItem.vb.mapSceneToView(pos)
         mx, my = mouse_point.x(), mouse_point.y()
         
-        # 寻找最近点
-        best_dist = float('inf')
+        # 将鼠标位置映射回屏幕像素，以便使用像素距离进行拾取判定
+        mouse_pixel = self.plot_widget.plotItem.vb.mapViewToScene(mouse_point)
+        
+        best_dist_pixel = float('inf')
         best_info = None
         
         for cid, data in self.curve_data_cache.items():
-            pts = np.column_stack((data['x'], data['y']))
-            # 过滤掉 nan
-            valid_mask = ~np.isnan(pts).any(axis=1)
-            if not valid_mask.any(): continue
+            if data.get('tree') is None:
+                continue
             
-            valid_pts = pts[valid_mask]
-            tree = cKDTree(valid_pts)
-            dist, idx = tree.query([mx, my])
+            # 使用数据坐标查询最近点
+            dist_data, idx = data['tree'].query([mx, my])
             
-            if dist < best_dist:
-                best_dist = dist
-                # 获取原始数组中的对应索引
-                orig_idx = np.where(valid_mask)[0][idx]
+            # 取出该点，转换为屏幕像素计算真实距离
+            pt_data = pg.QtCore.QPointF(data['x'][idx], data['y'][idx])
+            pt_pixel = self.plot_widget.plotItem.vb.mapViewToScene(pt_data)
+            
+            # 屏幕像素距离
+            dx = pt_pixel.x() - mouse_pixel.x()
+            dy = pt_pixel.y() - mouse_pixel.y()
+            dist_px = np.sqrt(dx**2 + dy**2)
+            
+            if dist_px < best_dist_pixel:
+                best_dist_pixel = dist_px
+                
+                orig_idx = data['valid_mask'][idx]
                 
                 best_info = {
                     'curve_id': cid,
-                    'x': data['x'][orig_idx],
-                    'y': data['y'][orig_idx],
-                    't': data['t'][orig_idx] if data['t'] is not None else None,
-                    'theta': data['theta'][orig_idx] if data['theta'] is not None else None
+                    'x': data['x'][idx],
+                    'y': data['y'][idx],
+                    't': data['t'][idx] if data['t'] is not None else None,
+                    'theta': data['theta'][idx] if data['theta'] is not None else None
                 }
                 
-        if best_info and best_dist < 1.0: # 距离阈值
+        # 屏幕像素阈值（例如 10 像素以内）
+        if best_info and best_dist_pixel < 10.0:
             self.point_clicked.emit(best_info)
 
     def reset_view(self):
@@ -171,43 +186,63 @@ class PlotCanvas(QWidget):
         
         cache_data = {'x': [], 'y': [], 't': None, 'theta': None}
 
-        if func_model.mode == "explicit":
-            x, y = Evaluator.evaluate_explicit(func_model.parsed_expr, x_min, x_max)
-            if len(x) > 0:
-                item = pg.PlotDataItem(x, y, pen=pen, name=func_model.name)
-                items.append(item)
-                cache_data['x'] = x
-                cache_data['y'] = y
-                
-        elif func_model.mode == "parametric":
-            expr_x, expr_y = func_model.parsed_expr
-            x, y = Evaluator.evaluate_parametric(expr_x, expr_y, func_model.t_min, func_model.t_max)
-            if len(x) > 0:
-                item = pg.PlotDataItem(x, y, pen=pen, name=func_model.name)
-                items.append(item)
-                cache_data['x'] = x
-                cache_data['y'] = y
-                cache_data['t'] = np.linspace(func_model.t_min, func_model.t_max, len(x))
-                
-        elif func_model.mode == "polar":
-            x, y = Evaluator.evaluate_polar(func_model.parsed_expr, func_model.t_min, func_model.t_max)
-            if len(x) > 0:
-                item = pg.PlotDataItem(x, y, pen=pen, name=func_model.name)
-                items.append(item)
-                cache_data['x'] = x
-                cache_data['y'] = y
-                cache_data['theta'] = np.linspace(func_model.t_min, func_model.t_max, len(x))
-                
-        elif func_model.mode == "implicit":
-            lines = Evaluator.evaluate_implicit(func_model.parsed_expr, x_min, x_max, y_min, y_max)
-            all_x, all_y = [], []
-            for lx, ly in lines:
-                item = pg.PlotDataItem(lx, ly, pen=pen)
-                items.append(item)
-                all_x.extend(lx)
-                all_y.extend(ly)
-            cache_data['x'] = np.array(all_x)
-            cache_data['y'] = np.array(all_y)
+        try:
+            if func_model.mode == "explicit":
+                x, y = Evaluator.evaluate_explicit(func_model.parsed_expr, x_min, x_max)
+                if len(x) > 0:
+                    item = pg.PlotDataItem(x, y, pen=pen, name=func_model.name)
+                    items.append(item)
+                    cache_data['x'] = x
+                    cache_data['y'] = y
+                    
+            elif func_model.mode == "parametric":
+                expr_x, expr_y = func_model.parsed_expr
+                x, y = Evaluator.evaluate_parametric(expr_x, expr_y, func_model.t_min, func_model.t_max)
+                if len(x) > 0:
+                    item = pg.PlotDataItem(x, y, pen=pen, name=func_model.name)
+                    items.append(item)
+                    cache_data['x'] = x
+                    cache_data['y'] = y
+                    cache_data['t'] = np.linspace(func_model.t_min, func_model.t_max, len(x))
+                    
+            elif func_model.mode == "polar":
+                x, y = Evaluator.evaluate_polar(func_model.parsed_expr, func_model.t_min, func_model.t_max)
+                if len(x) > 0:
+                    item = pg.PlotDataItem(x, y, pen=pen, name=func_model.name)
+                    items.append(item)
+                    cache_data['x'] = x
+                    cache_data['y'] = y
+                    cache_data['theta'] = np.linspace(func_model.t_min, func_model.t_max, len(x))
+                    
+            elif func_model.mode == "implicit":
+                lines = Evaluator.evaluate_implicit(func_model.parsed_expr, x_min, x_max, y_min, y_max)
+                all_x, all_y = [], []
+                for lx, ly in lines:
+                    item = pg.PlotDataItem(lx, ly, pen=pen)
+                    items.append(item)
+                    all_x.extend(lx)
+                    all_y.extend(ly)
+                if all_x:
+                    cache_data['x'] = np.array(all_x)
+                    cache_data['y'] = np.array(all_y)
+        except EvaluationError as e:
+            # 抛出给上层 UI 处理
+            raise e
+
+        # 构建并缓存 KDTree
+        if len(cache_data['x']) > 0:
+            pts = np.column_stack((cache_data['x'], cache_data['y']))
+            valid_mask = ~np.isnan(pts).any(axis=1)
+            if valid_mask.any():
+                cache_data['tree'] = cKDTree(pts[valid_mask])
+                cache_data['valid_mask'] = np.where(valid_mask)[0] # 记录原始索引
+                # 为方便拾取反查，保留有效点的数据
+                cache_data['x'] = cache_data['x'][valid_mask]
+                cache_data['y'] = cache_data['y'][valid_mask]
+                if cache_data['t'] is not None:
+                    cache_data['t'] = cache_data['t'][valid_mask]
+                if cache_data['theta'] is not None:
+                    cache_data['theta'] = cache_data['theta'][valid_mask]
 
         for item in items:
             self.plot_widget.addItem(item)
@@ -227,3 +262,11 @@ class PlotCanvas(QWidget):
         self.plot_widget.clear()
         self.curves.clear()
         self.curve_data_cache.clear()
+        self.polar_grid_items.clear()
+        
+        # 恢复网格状态
+        if self.grid_mode == 'cartesian':
+            self.plot_widget.showGrid(x=True, y=True)
+        else:
+            self.plot_widget.showGrid(x=False, y=False)
+            self._draw_polar_grid()

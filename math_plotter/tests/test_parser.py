@@ -25,6 +25,13 @@ def test_parse_parametric():
     assert expr[0].equals(sympy.cos(t))
     assert expr[1].equals(sympy.sin(t))
 
+def test_parse_parametric_with_piecewise():
+    # 测试带逗号的复杂参数方程不被误拆
+    mode, expr = ExpressionParser.parse_function("x = Piecewise((t, t>0), (-t, t<=0)), y = sin(t)")
+    assert mode == "parametric"
+    t = sympy.Symbol('t')
+    assert expr[1].equals(sympy.sin(t))
+
 def test_parse_polar():
     mode, expr = ExpressionParser.parse_function("r = 1 + sin(theta)")
     assert mode == "polar"

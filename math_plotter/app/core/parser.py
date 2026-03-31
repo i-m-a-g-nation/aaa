@@ -27,6 +27,31 @@ class ParseError(Exception):
 
 class ExpressionParser:
     @staticmethod
+    def _smart_split(s, delimiter=','):
+        """
+        基于括号深度的智能拆分，仅在括号外拆分。
+        解决 Piecewise((x, x>0), (-x, x<=0)) 内部逗号被误拆的问题。
+        """
+        parts = []
+        current = []
+        depth = 0
+        for char in s:
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+            
+            if char == delimiter and depth == 0:
+                parts.append(''.join(current).strip())
+                current = []
+            else:
+                current.append(char)
+        
+        if current:
+            parts.append(''.join(current).strip())
+        return parts
+
+    @staticmethod
     def _safe_parse(expr_str):
         expr_str = expr_str.replace('^', '**')
         # 拦截明显的危险关键字
@@ -64,8 +89,14 @@ class ExpressionParser:
         eq_match = re.search(r'(?<![<>!=])=(?![=])', input_str)
 
         if mode == "auto":
+            # 自动推断模式，但依然保留隐患，建议外部传入明确 mode
             if ',' in input_str and ('x=' in input_str.replace(' ','') or 'y=' in input_str.replace(' ','')):
-                mode = "parametric"
+                # 检查智能拆分后是否确实是两个部分，且分别包含 x= 和 y=
+                parts = ExpressionParser._smart_split(input_str, ',')
+                if len(parts) == 2 and any(p.strip().startswith('x') for p in parts) and any(p.strip().startswith('y') for p in parts):
+                    mode = "parametric"
+                else:
+                    mode = "explicit"
             elif input_str.replace(' ', '').startswith('r='):
                 mode = "polar"
             elif eq_match and not input_str.replace(' ', '').startswith('y='):
@@ -74,9 +105,9 @@ class ExpressionParser:
                 mode = "explicit"
 
         if mode == "parametric":
-            parts = input_str.split(',')
+            parts = ExpressionParser._smart_split(input_str, ',')
             if len(parts) != 2:
-                raise ParseError("参数方程格式错误，应为 'x=f(t), y=g(t)'")
+                raise ParseError("参数方程格式错误，应为 'x=f(t), y=g(t)'，注意逗号的正确使用。")
             
             x_str, y_str = parts[0].strip(), parts[1].strip()
             if x_str.startswith('y') and y_str.startswith('x'):

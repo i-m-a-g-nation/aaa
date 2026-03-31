@@ -128,6 +128,14 @@ class MainWindow(QMainWindow):
             
         self.info_label.setText(text)
 
+    def redraw_all(self, view_range=None):
+        for func_id, func_model in self.functions.items():
+            try:
+                self.canvas.add_or_update_curve(func_model)
+            except Exception as e:
+                # 记录状态栏而不是弹窗，避免拖拽时弹窗轰炸
+                self.statusBar().showMessage(f"绘制警告: {str(e)}", 3000)
+
     def add_function(self):
         expr_str = self.input_edit.text()
         if not expr_str:
@@ -168,11 +176,16 @@ class MainWindow(QMainWindow):
             # 绘制
             self.canvas.add_or_update_curve(func_model)
             self.input_edit.clear()
+            self.statusBar().showMessage("添加成功", 2000)
             
         except ParseError as e:
             QMessageBox.warning(self, "解析错误", str(e))
         except Exception as e:
-            QMessageBox.critical(self, "系统错误", str(e))
+            QMessageBox.warning(self, "计算/渲染错误", str(e))
+            # 渲染失败则从列表里移除，防止后续一直重绘失败
+            if 'func_model' in locals() and func_model.id in self.functions:
+                del self.functions[func_model.id]
+                self.func_list.takeItem(self.func_list.count() - 1)
 
     def delete_function(self):
         current_item = self.func_list.currentItem()
@@ -194,7 +207,8 @@ class MainWindow(QMainWindow):
         file_path, _ = QFileDialog.getSaveFileName(self, "保存工程", "", "JSON Files (*.json)")
         if file_path:
             try:
-                StorageService.save_project(file_path, self.functions)
+                view_range = self.canvas.get_view_range()
+                StorageService.save_project(file_path, self.functions, self.canvas.grid_mode, view_range)
                 QMessageBox.information(self, "成功", "工程保存成功")
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"保存失败: {str(e)}")
@@ -203,20 +217,37 @@ class MainWindow(QMainWindow):
         file_path, _ = QFileDialog.getOpenFileName(self, "加载工程", "", "JSON Files (*.json)")
         if file_path:
             try:
-                data = StorageService.load_project(file_path)
+                project_data = StorageService.load_project(file_path)
+                
                 # 清空当前
                 self.functions.clear()
                 self.canvas.clear_all()
                 self.func_list.clear()
                 
-                for item_data in data:
+                # 恢复视图状态
+                grid_mode = project_data.get('grid_mode', 'cartesian')
+                idx = 1 if grid_mode == 'polar' else 0
+                self.grid_mode_combo.setCurrentIndex(idx)
+                
+                view_range = project_data.get('view_range')
+                if view_range:
+                    self.canvas.plot_widget.setXRange(view_range[0][0], view_range[0][1], padding=0)
+                    self.canvas.plot_widget.setYRange(view_range[1][0], view_range[1][1], padding=0)
+                
+                for item_data in project_data['functions']:
                     expr_str = item_data['original_str']
-                    mode, parsed = ExpressionParser.parse_function(expr_str)
+                    # 如果存储了 mode，就传给 parser，否则(旧版)走 auto
+                    stored_mode = item_data.get('mode', 'auto')
+                    
+                    mode, parsed = ExpressionParser.parse_function(expr_str, mode=stored_mode)
+                    
                     func_model = FunctionCurve(
                         id=item_data['id'],
                         original_str=expr_str,
                         parsed_expr=parsed,
                         mode=mode,
+                        t_min=item_data.get('t_min', 0.0),
+                        t_max=item_data.get('t_max', 6.28318530718),
                         color=QColor(item_data['color']),
                         width=item_data['width'],
                         visible=item_data['visible'],

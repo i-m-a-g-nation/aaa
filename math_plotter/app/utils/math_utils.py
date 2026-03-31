@@ -1,6 +1,6 @@
 import numpy as np
 
-def clean_asymptotes(x, y, threshold=100.0):
+def clean_asymptotes(x, y, threshold=None):
     """
     处理渐近线和突变点，避免在断点处错误连线。
     在斜率过大且发生符号剧变的地方插入 np.nan。
@@ -8,25 +8,30 @@ def clean_asymptotes(x, y, threshold=100.0):
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     
-    # 将 Inf 和超出合理绘图范围的极大值替换为 NaN
-    # PyQtGraph 能够自动忽略 NaN 点并打断线条
     y_clean = np.copy(y)
     
-    # 差分检测斜率
     dy = np.diff(y_clean)
     dx = np.diff(x)
     
-    # 避免除零
     dx[dx == 0] = 1e-12
     slope = dy / dx
     
-    # 找到斜率绝对值过大的点
-    # threshold 可根据实际视口高度动态调整，这里给一个经验值
+    # 如果未指定 threshold，使用基于数据范围的自适应阈值
+    if threshold is None:
+        # 排除极大值干扰后计算 y 的动态范围
+        valid_y = y[np.abs(y) < 1e6]
+        if len(valid_y) > 0:
+            y_range = np.max(valid_y) - np.min(valid_y)
+            x_range = np.max(x) - np.min(x)
+            if x_range == 0: x_range = 1e-12
+            # 基础斜率的数百倍作为突变阈值
+            threshold = max(100.0, (y_range / x_range) * 500)
+        else:
+            threshold = 1000.0
+
     jump_indices = np.where(np.abs(slope) > threshold)[0]
     
     for idx in jump_indices:
-        # 如果是 y 跨越 0 导致的正负无穷，或者纯粹的跳跃
-        # 稳妥起见，直接把跳跃点设为 nan
         y_clean[idx] = np.nan
         y_clean[idx+1] = np.nan
         
